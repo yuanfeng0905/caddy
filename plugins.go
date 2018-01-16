@@ -267,6 +267,18 @@ func EmitEvent(event EventName, info interface{}) {
 	}
 }
 
+// 移除事件钩子，用于模块重载
+func RemoveEventHook(name string) {
+	if name == "" {
+		panic("event hook must have a name")
+	}
+
+	if _, ok := eventHooks[name]; ok {
+		delete(eventHooks, name)
+	}
+
+}
+
 // ParsingCallback is a function that is called after
 // a directive's setup functions have been executed
 // for all the server blocks.
