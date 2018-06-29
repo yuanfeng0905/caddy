@@ -21,6 +21,8 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+
+	"github.com/mholt/caddy/telemetry"
 )
 
 // trapSignalsPosix captures POSIX-only signals.
@@ -31,35 +33,33 @@ func trapSignalsPosix() {
 
 		for sig := range sigchan {
 			switch sig {
-			case syscall.SIGTERM:
-				log.Println("[INFO] SIGTERM: Terminating process")
-				if PidFile != "" {
-					os.Remove(PidFile)
+			case syscall.SIGQUIT:
+				log.Println("[INFO] SIGQUIT: Quitting process immediately")
+				for _, f := range OnProcessExit {
+					f() // only perform important cleanup actions
 				}
 				os.Exit(0)
 
-			case syscall.SIGQUIT:
-				log.Println("[INFO] SIGQUIT: Shutting down")
-				exitCode := executeShutdownCallbacks("SIGQUIT")
+			case syscall.SIGTERM:
+				log.Println("[INFO] SIGTERM: Shutting down servers then terminating")
+				exitCode := executeShutdownCallbacks("SIGTERM")
+				for _, f := range OnProcessExit {
+					f() // only perform important cleanup actions
+				}
 				err := Stop()
 				if err != nil {
-					log.Printf("[ERROR] SIGQUIT stop: %v", err)
+					log.Printf("[ERROR] SIGTERM stop: %v", err)
 					exitCode = 3
 				}
-				if PidFile != "" {
-					os.Remove(PidFile)
-				}
-				os.Exit(exitCode)
 
-			case syscall.SIGHUP:
-				log.Println("[INFO] SIGHUP: Hanging up")
-				err := Stop()
-				if err != nil {
-					log.Printf("[ERROR] SIGHUP stop: %v", err)
-				}
+				telemetry.AppendUnique("sigtrap", "SIGTERM")
+				go telemetry.StopEmitting() // won't finish in time, but that's OK - just don't block
+
+				os.Exit(exitCode)
 
 			case syscall.SIGUSR1:
 				log.Println("[INFO] SIGUSR1: Reloading")
+				go telemetry.AppendUnique("sigtrap", "SIGUSR1")
 
 				// Start with the existing Caddyfile
 				caddyfileToUse, inst, err := getCurrentCaddyfile()
@@ -83,17 +83,31 @@ func trapSignalsPosix() {
 					caddyfileToUse = newCaddyfile
 				}
 
+				// Backup old event hooks
+				oldEventHooks := cloneEventHooks()
+
+				// Purge the old event hooks
+				purgeEventHooks()
+
 				// Kick off the restart; our work is done
+				EmitEvent(InstanceRestartEvent, nil)
 				_, err = inst.Restart(caddyfileToUse)
 				if err != nil {
+					restoreEventHooks(oldEventHooks)
+
 					log.Printf("[ERROR] SIGUSR1: %v", err)
 				}
 
 			case syscall.SIGUSR2:
 				log.Println("[INFO] SIGUSR2: Upgrading")
+				go telemetry.AppendUnique("sigtrap", "SIGUSR2")
 				if err := Upgrade(); err != nil {
 					log.Printf("[ERROR] SIGUSR2: upgrading: %v", err)
 				}
+
+			case syscall.SIGHUP:
+				// ignore; this signal is sometimes sent outside of the user's control
+				go telemetry.AppendUnique("sigtrap", "SIGHUP")
 			}
 		}
 	}()
