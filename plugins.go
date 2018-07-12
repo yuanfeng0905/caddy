@@ -327,16 +327,18 @@ func restoreEventHooks(m *sync.Map) {
 	})
 }
 
-// 移除事件钩子，用于模块重载
+// RemoveEventHook 移除事件钩子，用于模块重载
 func RemoveEventHook(name string) {
 	if name == "" {
 		panic("event hook must have a name")
 	}
-
-	if _, ok := eventHooks[name]; ok {
-		delete(eventHooks, name)
-	}
-
+	eventHooks.Range(func(k, _ interface{}) bool {
+		if k.(string) == name {
+			eventHooks.Delete(k)
+			return false
+		}
+		return true
+	})
 }
 
 // ParsingCallback is a function that is called after
